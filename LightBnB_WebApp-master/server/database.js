@@ -84,7 +84,7 @@ const getAllReservations = function(guest_id, limit = 10) {
     FROM reservations
     JOIN properties on properties.id = property_id
     JOIN users on users.id = reservations.guest_id
-    join property_reviews ON users.id = property_reviews.guest_id
+    JOIN property_reviews ON users.id = property_reviews.guest_id
     WHERE reservations.guest_id = $1
     GROUP BY reservations.id, properties.id
     ORDER BY start_date ASC
@@ -108,8 +108,71 @@ exports.getAllReservations = getAllReservations;
  * @return {Promise<[{}]>}  A promise to the properties.
  */
 const getAllProperties = function(options, limit = 10) {
-  return pool
-    .query(`SELECT * FROM properties LIMIT $1;`, [limit])
+
+  // STEP 1
+  const queryParams = [];
+
+  // STEP 2
+  let queryString = `
+  SELECT properties.*, AVG(property_reviews.rating) AS average_rating
+  FROM properties
+  JOIN property_reviews ON property_id = properties.id
+  `;
+
+  // param checks - let's start by assuming there's only ONE param and go from there.
+
+  // PARAM CHECK 1 OF 5 - owner id - should be first checked because no others will be set when getting "my listings"
+  if (options.owner_id) {
+    queryParams.push(Number(options.owner_id)); // OK, seems like does not need to be explicitly set to Number(), but i like it better this way
+    queryString += `WHERE owner_id = $${queryParams.length}
+    `;
+  }
+
+  // PARAM CHECK 2 OF 5 - city -  is still case sensitive like this. but there is a way to fix it, could come back later.
+  if (options.city) {
+    queryParams.push(`%${options.city}%`);
+    queryString += queryParams.length > 1 ? ` AND ` : `WHERE `;
+    queryString += `city LIKE $${queryParams.length}
+    `;
+  }
+
+  // 3 OF 5
+  if (options.minimum_price_per_night) {
+    queryParams.push(Number(options.minimum_price_per_night) * 100);
+    queryString += queryParams.length > 1 ? ` AND ` : `WHERE `;
+    queryString += `cost_per_night > $${queryParams.length}
+    `;
+  }
+
+  // 4 OF 5
+  if (options.maximum_price_per_night) {
+    queryParams.push(Number(options.maximum_price_per_night) * 100);
+    queryString += queryParams.length > 1 ? ` AND ` : `WHERE `;
+    queryString += `cost_per_night < $${queryParams.length}
+    `;
+  }
+
+
+
+  // LAST STEPS
+  queryString += `GROUP BY properties.id
+  `;
+
+  if (options.minimum_rating) {
+    queryParams.push(Number(options.minimum_rating));
+    queryString += `HAVING AVG(property_reviews.rating) >= $${queryParams.length}
+    `;
+  }
+
+  queryParams.push(limit);
+  queryString += `ORDER BY cost_per_night
+  LIMIT $${queryParams.length};
+  `;
+
+  // testing check
+  console.log(queryString, queryParams);
+
+  return pool.query(queryString, queryParams)
     .then((result) => {
       return result.rows;
     })
